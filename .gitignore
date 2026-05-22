@@ -44,3 +44,7 @@ app.*.map.json
 *.log
 .DS_Store
 Thumbs.db
+
+# WhatsApp session data
+**/.wwebjs_auth/
+**/.wwebjs_cache/

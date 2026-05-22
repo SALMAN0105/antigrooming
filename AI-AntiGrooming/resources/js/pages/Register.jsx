@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import axios from 'axios';
-import { ShieldCheck, Mail, Lock, User as UserIcon, ArrowRight, Loader2, Sparkles, AlertCircle, CheckCircle2, Calendar, Eye, EyeOff } from 'lucide-react';
+import { ShieldCheck, Mail, Lock, User as UserIcon, ArrowRight, Loader2, Sparkles, AlertCircle, CheckCircle2, Calendar, Eye, EyeOff, Phone } from 'lucide-react';
 
 // Hitung tanggal maksimum untuk input (18 tahun lalu dari hari ini)
 function getMaxDOB() {
@@ -37,7 +37,7 @@ function Toast({ type, message, onClose }) {
 
 export default function Register() {
     const navigate = useNavigate();
-    const [formData, setFormData] = useState({ name: '', email: '', password: '', date_of_birth: '' });
+    const [formData, setFormData] = useState({ name: '', email: '', password: '', date_of_birth: '', no_hp: '' });
     const [loading, setLoading] = useState(false);
     const [toast, setToast] = useState(null); // { type: 'success'|'error', message: '' }
     const [showPassword, setShowPassword] = useState(false);
@@ -158,6 +158,25 @@ export default function Register() {
                                     className="block w-full pl-12 pr-4 py-3.5 bg-slate-50 border-2 border-slate-100 rounded-2xl focus:bg-white focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 transition-all text-slate-800 font-bold text-sm placeholder:text-slate-400 outline-none"
                                     placeholder="nama@email.com"
                                     value={formData.email}
+                                    onChange={handleChange}
+                                />
+                            </div>
+                        </div>
+
+                        {/* Nomor WhatsApp / HP */}
+                        <div className="space-y-1.5">
+                            <label className="block text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">Nomor WhatsApp / HP</label>
+                            <div className="relative group/input">
+                                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none transition-colors group-focus-within/input:text-indigo-600 text-slate-400">
+                                    <Phone className="h-4 w-4" />
+                                </div>
+                                <input
+                                    name="no_hp"
+                                    type="text"
+                                    required
+                                    className="block w-full pl-12 pr-4 py-3.5 bg-slate-50 border-2 border-slate-100 rounded-2xl focus:bg-white focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 transition-all text-slate-800 font-bold text-sm placeholder:text-slate-400 outline-none"
+                                    placeholder="Contoh: 081234567890"
+                                    value={formData.no_hp}
                                     onChange={handleChange}
                                 />
                             </div>

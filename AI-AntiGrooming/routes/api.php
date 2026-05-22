@@ -12,6 +12,7 @@ Route::post('/login', [ApiAuthController::class, 'login']);
 Route::post('/incidents', [IncidentController::class, 'store']); // HP Anak menembak ke sini, tidak pakai token Sanctum karena pakai UUID
 Route::get('/device/status/{token}', [\App\Http\Controllers\Api\PairingController::class, 'checkStatus']);
 Route::post('/device/pair-with-qrcode', [PairingController::class, 'pairWithQrCode']);
+Route::post('/alert-grooming', [IncidentController::class, 'handleGroomingAlert']);
 
 // Rute Terlindungi (Aplikasi Orang Tua dengan Bearer Token)
 Route::middleware('auth:sanctum')->group(function () {

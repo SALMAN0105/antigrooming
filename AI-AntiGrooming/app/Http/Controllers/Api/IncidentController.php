@@ -5,10 +5,13 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Incident;
 use App\Models\Device;
+use App\Models\Child;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
 use App\Mail\DangerAlertMail;
 use Kreait\Firebase\Factory;
 use Kreait\Firebase\Messaging\CloudMessage;
@@ -146,6 +149,81 @@ class IncidentController extends Controller
             $messaging->send($message);
         } catch (\Exception $e) {
             Log::error('FCM Error: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Endpoint untuk memicu notifikasi WhatsApp Darurat dari deteksi AI Python
+     */
+    public function handleGroomingAlert(Request $request)
+    {
+        $request->validate([
+            'child_id' => 'required|exists:anak,id',
+            'evidence' => 'required|string',
+        ]);
+
+        $childId = $request->input('child_id');
+        $evidence = $request->input('evidence');
+
+        // Throttling/Cooldown: 30 menit per anak
+        $cacheKey = "grooming_cooldown_{$childId}";
+        if (Cache::has($cacheKey)) {
+            Log::info("WhatsApp alert ignored due to cooldown for child: {$childId}");
+            return response()->json([
+                'status'  => 'ignored',
+                'message' => 'Notifikasi WhatsApp sedang dalam masa cooldown (30 menit).'
+            ]);
+        }
+
+        // Query O(1) untuk mengambil anak beserta user (orang tua)
+        $child = Child::with('user')->find($childId);
+
+        if (!$child || !$child->user || !$child->user->no_hp) {
+            Log::warning("Gagal mengirim WhatsApp alert: orang tua tidak ditemukan atau nomor HP kosong untuk child ID: {$childId}");
+            return response()->json([
+                'status'  => 'error',
+                'message' => 'Data orang tua atau nomor HP tidak terdaftar.'
+            ], 404);
+        }
+
+        $parentPhone = $child->user->no_hp;
+        $childName = $child->nama;
+
+        // Siapkan pesan notifikasi
+        $message = "⚠️ *PERINGATAN DETEKSI GROOMING (ANTI-GROOMING)* ⚠️\n\n" .
+                   "Sistem kami mendeteksi obrolan berbahaya pada perangkat anak Anda (*{$childName}*).\n\n" .
+                   "*Detail Percakapan:* \n\"{$evidence}\"\n\n" .
+                   "Mohon segera periksa perangkat anak Anda untuk memastikan keselamatannya.";
+
+        try {
+            // Mengirim HTTP request ke service Node.js lokal dengan timeout 3 detik
+            $response = Http::timeout(3)->post('http://localhost:3000/kirim-wa', [
+                'nomor' => $parentPhone,
+                'pesan' => $message,
+            ]);
+
+            if ($response->successful()) {
+                // Set cache cooldown selama 30 menit
+                Cache::put($cacheKey, true, now()->addMinutes(30));
+                
+                Log::info("WhatsApp alert successfully sent for child: {$childId} to {$parentPhone}");
+                return response()->json([
+                    'status'  => 'success',
+                    'message' => 'Notifikasi WhatsApp berhasil dikirim.'
+                ]);
+            } else {
+                Log::error("Node.js WhatsApp service returned failure: " . $response->body());
+                return response()->json([
+                    'status'  => 'error',
+                    'message' => 'Gagal mengirim notifikasi via Node.js service.'
+                ], 500);
+            }
+        } catch (\Exception $e) {
+            Log::error("Gagal terhubung ke service WhatsApp Node.js: " . $e->getMessage());
+            return response()->json([
+                'status'  => 'error',
+                'message' => 'Gagal terhubung ke service WhatsApp Node.js (Timeout/Koneksi terputus).'
+            ], 500);
         }
     }
 }

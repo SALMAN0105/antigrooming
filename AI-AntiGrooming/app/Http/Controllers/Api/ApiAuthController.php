@@ -18,9 +18,11 @@ class ApiAuthController extends Controller
             'name'          => 'required|string|max:255',
             'email'         => 'required|string|email|max:255|unique:users',
             'password'      => 'required|string|min:8',
+            'no_hp'         => 'required|string|max:20',
             'date_of_birth' => 'required|date|before_or_equal:' . $minDate,
             'fcm_token'     => 'nullable|string',
         ], [
+            'no_hp.required'                => 'Nomor HP/WhatsApp wajib diisi.',
             'date_of_birth.required'        => 'Tanggal lahir wajib diisi.',
             'date_of_birth.date'            => 'Format tanggal lahir tidak valid.',
             'date_of_birth.before_or_equal' => 'Anda harus berumur minimal 18 tahun untuk mendaftar.',
@@ -30,6 +32,7 @@ class ApiAuthController extends Controller
             'name'          => $request->name,
             'email'         => $request->email,
             'password'      => Hash::make($request->password),
+            'no_hp'         => $request->no_hp,
             'date_of_birth' => $request->date_of_birth,
             'fcm_token'     => $request->fcm_token,
         ]);

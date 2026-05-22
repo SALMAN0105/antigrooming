@@ -10,6 +10,9 @@ Pipeline:
 """
 
 from flask import Flask, request, jsonify
+import requests
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from tensorflow.keras.models import load_model
 from tensorflow.keras.preprocessing.sequence import pad_sequences
 from tensorflow.keras.preprocessing.text import tokenizer_from_json
@@ -29,6 +32,27 @@ try:
 except Exception as e:
     print(f"❌ Error muat model: {e}")
     exit()
+
+
+def send_grooming_alert(child_id, teks_berbahaya):
+    """
+    Kirim notifikasi POST ke API Laravel backend utama.
+    """
+    url = "https://antigrooming.test/api/alert-grooming"
+    payload = {
+        'child_id': child_id,
+        'evidence': teks_berbahaya
+    }
+    try:
+        # Panggil dengan timeout 5 detik dari Python ke Laravel
+        # verify=False digunakan agar tidak error pada sertifikat SSL lokal self-signed FlyEnv
+        response = requests.post(url, json=payload, timeout=5, verify=False)
+        if response.status_code == 200:
+            print(f"✅ Alert Laravel berhasil dikirim untuk anak ID {child_id}: {response.json()}")
+        else:
+            print(f"⚠️ Alert Laravel mengembalikan status {response.status_code}: {response.text}")
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Gagal mengirim alert ke Laravel: {e}")
 
 
 @app.route('/analyze', methods=['POST'])
@@ -57,6 +81,11 @@ def analyze_text():
           f"(Model: {result.raw_model_score:.4f}, Pattern: {result.pattern_score:.4f}) "
           f"| Pola: {result.detected_patterns} "
           f"| Teks: {raw_text[:50]}...")
+
+    # Pemicu notifikasi WhatsApp Darurat jika terdeteksi grooming kritis
+    if result.detected:
+        child_id = data.get('child_id', 1)  # Default ke 1 jika tidak disediakan
+        send_grooming_alert(child_id, raw_text)
 
     return jsonify({
         'status': 'success',
