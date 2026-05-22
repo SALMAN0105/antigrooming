@@ -1,0 +1,1681 @@
+This file is a merged representation of a subset of the codebase, containing specifically included files, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of a subset of the repository's contents that is considered the most important context.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Only files matching these patterns are included: storage/app/firebase_credentials.json, routes, resources/views, database/migrations, app, Ai-AntiGrooming-API/train.py, Ai-AntiGrooming-API/api.py
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+Ai-AntiGrooming-API/api.py
+Ai-AntiGrooming-API/train.py
+app/Http/Controllers/Api/ApiAuthController.php
+app/Http/Controllers/Api/IncidentController.php
+app/Http/Controllers/Api/PairingController.php
+app/Http/Controllers/AuthController.php
+app/Http/Controllers/Controller.php
+app/Http/Controllers/DashboardController.php
+app/Models/Child.php
+app/Models/Device.php
+app/Models/Incident.php
+app/Models/User.php
+app/Providers/AppServiceProvider.php
+database/migrations/0001_01_01_000000_create_users_table.php
+database/migrations/0001_01_01_000001_create_cache_table.php
+database/migrations/0001_01_01_000002_create_jobs_table.php
+database/migrations/2025_11_10_023837_create_children_table.php
+database/migrations/2025_11_10_023838_create_devices_table.php
+database/migrations/2025_11_10_023839_create_incidents_table.php
+database/migrations/2026_04_28_074747_create_personal_access_tokens_table.php
+database/migrations/2026_04_28_111447_add_pelaku_to_incidents_table.php
+database/migrations/2026_04_28_113846_add_fcm_token_to_users_table.php
+resources/views/auth/login.blade.php
+resources/views/auth/register.blade.php
+resources/views/dashboard.blade.php
+routes/api.php
+routes/console.php
+routes/web.php
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="Ai-AntiGrooming-API/api.py">
+import json
+import re
+import numpy as np
+import mysql.connector
+from datetime import datetime
+from flask import Flask, request, jsonify
+from tensorflow.keras.models import load_model
+from tensorflow.keras.preprocessing.text import tokenizer_from_json
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+
+print("--- Memulai API Server ---")
+
+# Configure database
+DB_CONFIG = {
+    'host': '127.0.0.1',
+    'user': 'root',
+    'password': '',
+    'database': 'db_ai_antigrooming'  # PERBAIKAN: Ganti strip dengan underscore
+}
+
+# Menentukan score grooming
+DETECTION_THRESHOLD = 0.8
+MAX_LEN = 50
+
+# --- 1. Load Artefak AI ---
+print("Memuat model AI (model.keras)...")
+try:
+    model = load_model('model.keras')
+    print("Memuat kamus (tokenizer.json)...")
+    with open('tokenizer.json') as f:
+        data = f.read()
+        tokenizer = tokenizer_from_json(data)
+    print("✅ Model dan kamus berhasil dimuat ke memori.")
+except Exception as e:
+    print(f"❌ FATAL ERROR: Gagal memuat model atau tokenizer: {e}")
+    exit()
+
+# --- 2. Inisialisasi Flask API ---
+app = Flask(__name__)
+
+# --- 3. Fungsi Helper (Pembersih & Prediksi) ---
+def clean_text(text):
+    """Membersihkan teks dari karakter khusus"""
+    text = str(text).lower()
+    text = re.sub(r'[^a-zA-Z0-9\s]', '', text)
+    return text
+
+def predict_text(text):
+    """Memprediksi score grooming dari teks"""
+    cleaned_text = clean_text(text)
+    sequences = tokenizer.texts_to_sequences([cleaned_text])
+    padded = pad_sequences(sequences, maxlen=MAX_LEN, truncating='post', padding='post')
+    score = model.predict(padded, verbose=0)[0][0]  # PERBAIKAN: Tambah verbose=0
+    return float(score)
+
+# --- 4. Fungsi Helper (Database) ---
+def map_risk_level(score):
+    """Mapping score ke level risiko"""
+    if score > 0.95: return 'critical'
+    if score > 0.8: return 'high'
+    if score > 0.6: return 'medium'
+    return 'low'
+
+def get_db_connection():
+    """Membuat koneksi ke database"""
+    try:
+        conn = mysql.connector.connect(**DB_CONFIG)
+        return conn
+    except mysql.connector.Error as err:
+        print(f"❌ Error koneksi DB: {err}")
+        return None
+
+def get_device_id(device_token):
+    """Mendapatkan device_id dari token"""
+    conn = get_db_connection()
+    if conn is None: 
+        return None
+    
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT id FROM devices WHERE device_token = %s", (device_token,))
+        result = cursor.fetchone()
+        return result[0] if result else None
+    except Exception as e:
+        print(f"❌ Error saat query device_id: {e}")
+        return None
+    finally:
+        cursor.close()
+        conn.close()
+
+def save_incident_to_db(device_id, text, app_name, risk_level, timestamp, screenshot_path):
+    """Menyimpan data insiden ke tabel 'incidents'"""
+    conn = get_db_connection()
+    if conn is None: 
+        return False
+
+    cursor = conn.cursor()
+    now = datetime.now()
+    
+    # PERBAIKAN: Handle screenshot_path yang None
+    if screenshot_path and screenshot_path.strip():
+        screenshot_value = screenshot_path
+    else:
+        screenshot_value = None
+
+    query = """
+    INSERT INTO incidents 
+    (device_id, incident_timestamp, detected_text, app_name, risk_level, screenshot_path, created_at, updated_at) 
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+    """
+    values = (
+        device_id,
+        timestamp,
+        text,
+        app_name,
+        risk_level,
+        screenshot_value,  # PERBAIKAN: Bisa NULL
+        now,               # created_at
+        now                # updated_at
+    )
+    
+    try:
+        cursor.execute(query, values)
+        conn.commit()
+        print(f"✅ Sukses: Insiden '{text[:50]}...' disimpan ke DB.")
+        return True
+    except Exception as e:
+        conn.rollback()
+        print(f"❌ Error saat INSERT ke 'incidents': {e}")
+        return False
+    finally:
+        cursor.close()
+        conn.close()
+
+# --- 5. Endpoint API Utama ---
+@app.route('/analyze', methods=['POST'])
+def analyze_text():
+    """Endpoint utama untuk analisis teks grooming"""
+    
+    # Ambil data dari request
+    data = request.json
+    
+    # Validasi data wajib
+    if not data:
+        return jsonify({'error': 'Request body kosong'}), 400
+    
+    required_fields = ['text', 'device_token', 'app_name']
+    missing_fields = [field for field in required_fields if field not in data]
+    
+    if missing_fields:
+        return jsonify({
+            'error': f'Data tidak lengkap. Field yang hilang: {", ".join(missing_fields)}'
+        }), 400
+    
+    # Ekstrak data
+    text_to_analyze = data['text']
+    device_token = data['device_token']
+    app_name = data['app_name']
+    screenshot_path = data.get('screenshot_path', None)
+    incident_timestamp = data.get('timestamp', datetime.now().isoformat())
+    
+    # Validasi teks tidak kosong
+    if not text_to_analyze or not text_to_analyze.strip():
+        return jsonify({'error': 'Teks tidak boleh kosong'}), 400
+    
+    print(f"\n{'='*60}")
+    print(f"📥 Menerima request:")
+    print(f"   Teks: '{text_to_analyze[:100]}...'")
+    print(f"   App: {app_name}")
+    print(f"   Token: {device_token}")
+    print(f"   Screenshot: {'Ada' if screenshot_path else 'Tidak ada'}")
+    print(f"{'='*60}")
+    
+    # Prediksi dengan AI
+    try:
+        score = predict_text(text_to_analyze)
+        print(f"🤖 Skor AI: {score:.4f}")
+    except Exception as e:
+        print(f"❌ Error saat prediksi: {e}")
+        return jsonify({'error': 'Gagal melakukan prediksi AI'}), 500
+    
+    incident_saved = False
+    
+    # Jika terdeteksi berbahaya
+    if score >= DETECTION_THRESHOLD:
+        print(f"⚠️ DETEKSI: Teks terdeteksi berbahaya! (Score: {score:.4f})")
+        
+        device_id = get_device_id(device_token)
+        
+        if device_id:
+            risk_level = map_risk_level(score)
+            print(f"📊 Risk Level: {risk_level.upper()}")
+            
+            incident_saved = save_incident_to_db(
+                device_id,
+                text_to_analyze,
+                app_name,
+                risk_level,
+                incident_timestamp,
+                screenshot_path
+            )
+        else:
+            print(f"❌ Gagal simpan: Device token '{device_token}' tidak terdaftar di database.")
+    else:
+        print(f"✅ DETEKSI: Teks aman. (Score: {score:.4f})")
+
+    # Response
+    response = {
+        'status': 'success',
+        'input_text': text_to_analyze,
+        'score': score,
+        'detected': (score >= DETECTION_THRESHOLD),
+        'incident_saved_to_db': incident_saved,
+        'risk_level': map_risk_level(score) if score >= DETECTION_THRESHOLD else 'safe'
+    }
+    
+    print(f"📤 Response: {response}")
+    return jsonify(response)
+
+# --- 6. Endpoint Health Check ---
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Endpoint untuk cek status server"""
+    try:
+        conn = get_db_connection()
+        db_status = "connected" if conn else "disconnected"
+        if conn:
+            conn.close()
+        
+        return jsonify({
+            'status': 'ok',
+            'database': db_status,
+            'model': 'loaded',
+            'timestamp': datetime.now().isoformat()
+        })
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'error': str(e)
+        }), 500
+
+# --- 7. Error Handlers ---
+@app.errorhandler(404)
+def not_found(error):
+    return jsonify({'error': 'Endpoint tidak ditemukan'}), 404
+
+@app.errorhandler(500)
+def internal_error(error):
+    return jsonify({'error': 'Internal server error'}), 500
+
+# --- 8. Jalankan Server ---
+if __name__ == '__main__':
+    print("\n" + "="*60)
+    print("🚀 Server Flask siap berjalan!")
+    print("📍 Endpoint tersedia:")
+    print("   POST /analyze  - Analisis teks grooming")
+    print("   GET  /health   - Health check")
+    print("="*60 + "\n")
+    
+    app.run(debug=True, host='0.0.0.0', port=5000)
+</file>
+
+<file path="Ai-AntiGrooming-API/train.py">
+import pandas as pd
+import re
+import json
+import numpy as np
+from tensorflow.keras.preprocessing.text import Tokenizer
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Embedding, GlobalAveragePooling1D, Dense
+from sklearn.model_selection import train_test_split
+
+# --- 1. Konfigurasi Awal ---
+VOCAB_SIZE = 5000  # Ukuran "kamus" kita, 5000 kata paling top
+MAX_LEN = 50       # Panjang maks kalimat (dipotong/ditambah padding)
+EMBEDDING_DIM = 16 # Dimensi vektor untuk setiap kata
+
+print("Memulai script training...")
+
+# --- 2. Load & Bersihkan Data ---
+try:
+    df = pd.read_csv('dataset.csv')
+except FileNotFoundError:
+    print("Error: file 'dataset.csv' tidak ditemukan.")
+    exit()
+
+def clean_text(text):
+    text = str(text).lower()  # Ke huruf kecil
+    text = re.sub(r'[^a-zA-Z0-9\s]', '', text) # Hapus simbol selain huruf & angka
+    return text
+
+df['text'] = df['text'].apply(clean_text)
+
+# Pisahkan data teks dan label
+texts = df['text'].values
+labels = df['label'].values.astype(np.float32) # Pastikan label adalah angka
+
+print(f"Dataset berhasil di-load: {len(texts)} baris data.")
+
+# --- 3. Tokenization (Ubah Teks jadi Angka) ---
+# Ini adalah "kamus" yang memetakan kata ke angka
+tokenizer = Tokenizer(num_words=VOCAB_SIZE, oov_token="<OOV>")
+tokenizer.fit_on_texts(texts)
+
+# Ubah teks menjadi urutan angka
+sequences = tokenizer.texts_to_sequences(texts)
+
+# Samakan panjang semua urutan angka (Padding)
+padded_sequences = pad_sequences(sequences, maxlen=MAX_LEN, truncating='post', padding='post')
+
+# --- 4. Split Data Training & Validasi ---
+# Kita pisah data, 80% untuk latihan, 20% untuk tes
+X_train, X_val, y_train, y_val = train_test_split(padded_sequences, labels, test_size=0.2, random_state=42)
+
+print(f"Data di-split: {len(X_train)} training, {len(X_val)} validasi.")
+
+# --- 5. Bangun Arsitektur Model AI ---
+# Ini adalah arsitektur sederhana namun efektif untuk klasifikasi teks
+model = Sequential([
+    # 1. Embedding: Ubah angka jadi vektor (mempelajari konteks)
+    Embedding(VOCAB_SIZE, EMBEDDING_DIM, input_length=MAX_LEN),
+    
+    # 2. Pooling: Rata-ratakan vektor kalimat (cari "inti" kalimat)
+    GlobalAveragePooling1D(),
+    
+    # 3. Hidden Layer: Otak untuk "berpikir"
+    Dense(16, activation='relu'),
+    
+    # 4. Output Layer: 1 neuron (0 = Aman, 1 = Bahaya)
+    # Pakai 'sigmoid' karena ini klasifikasi biner
+    Dense(1, activation='sigmoid')
+])
+
+# Compile model, tentukan cara belajarnya
+model.compile(
+    loss='binary_crossentropy', # Loss function untuk biner
+    optimizer='adam',           # Optimizer standar
+    metrics=['accuracy']        # Metrik yang ingin kita lihat
+)
+
+model.summary() # Tampilkan arsitektur model di terminal
+
+# --- 6. Latih Model ---
+print("\nMemulai proses training...")
+NUM_EPOCHS = 30 # Berapa kali model "belajar" (bisa dinaikkan jika data banyak)
+
+history = model.fit(
+    X_train, y_train,
+    epochs=NUM_EPOCHS,
+    validation_data=(X_val, y_val),
+    verbose=2
+)
+
+print("\nTraining selesai.")
+
+# --- 7. Simpan "Artefak" (Model & Tokenizer) ---
+# Ini adalah bagian paling penting untuk API kita
+
+# 1. Simpan model yang sudah dilatih
+model.save('model.keras')
+
+# 2. Simpan "kamus" Tokenizer
+tokenizer_json = tokenizer.to_json()
+with open('tokenizer.json', 'w', encoding='utf-8') as f:
+    # Kita pakai json.loads dan json.dumps agar formatnya rapi (pretty print)
+    f.write(json.dumps(json.loads(tokenizer_json), ensure_ascii=False, indent=4))
+
+print("\n--- Hasil Disimpan! ---")
+print("Model AI disimpan di: model.keras")
+print("Kamus (Tokenizer) disimpan di: tokenizer.json")
+</file>
+
+<file path="app/Http/Controllers/Api/ApiAuthController.php">
+<?php
+
+namespace App\Http\Controllers\Api;
+
+use App\Http\Controllers\Controller;
+use App\Models\User;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Validation\ValidationException;
+
+class ApiAuthController extends Controller
+{
+    public function login(Request $request)
+    {
+        $request->validate([
+            'email' => 'required|email',
+            'password' => 'required',
+            'fcm_token' => 'nullable|string' // Menerima token dari HP orang tua
+        ]);
+        
+        $user = User::query()->where('email', $request->email)->first();
+
+        if (! $user || ! Hash::check($request->password, $user->password)) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Kredensial tidak valid.'
+            ], 401);
+        }
+
+        // Update fcm_token jika ada device baru yang login
+        if ($request->filled('fcm_token')) {
+            $user->update(['fcm_token' => $request->fcm_token]);
+        }
+
+        // Hapus token lama (opsional, jika ingin 1 akun 1 HP saja)
+        // $user->tokens()->delete(); 
+
+        // Generate Token Sanctum baru
+        $token = $user->createToken('parent_mobile_app')->plainTextToken;
+
+        return response()->json([
+            'status' => 'success',
+            'message' => 'Login berhasil',
+            'data' => [
+                'user' => $user,
+                'access_token' => $token,
+            ]
+        ], 200);
+    }
+
+    public function logout(Request $request)
+    {
+        /** @var \Laravel\Sanctum\PersonalAccessToken $token */
+        $token = $request->user()->currentAccessToken();
+        $token->delete();
+
+        return response()->json([
+            'status' => 'success',
+            'message' => 'Logout berhasil'
+        ], 200);
+    }
+}
+</file>
+
+<file path="app/Http/Controllers/Api/IncidentController.php">
+<?php
+
+namespace App\Http\Controllers\Api;
+
+use App\Http\Controllers\Controller;
+use App\Models\Incident;
+use App\Models\Device;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Log;
+use Kreait\Firebase\Factory;
+use Kreait\Firebase\Messaging\CloudMessage;
+use Kreait\Firebase\Messaging\Notification;
+
+class IncidentController extends Controller
+{
+    /**
+     * Endpoint untuk HP Orang Tua mengambil daftar insiden
+     */
+    public function index(Request $request)
+    {
+        $user = $request->user();
+        
+        // Ekstrak ID device milik anak-anak dari user ini secara O(1)
+        $deviceIds = $user->devices()->pluck('devices.id');
+
+        // Ambil insiden dengan Eager Loading (mencegah N+1 Query Problem) dan Linter Fix
+        $incidents = Incident::query()->whereIn('device_id', $deviceIds->toArray(), 'and', false)
+                            ->with('device.child')
+                            ->latest('incident_timestamp')
+                            ->paginate(20);
+
+        return response()->json([
+            'status' => 'success',
+            'data'   => $incidents
+        ]);
+    }
+
+    /**
+     * Endpoint untuk HP Anak mengirim bukti grooming (Dipanggil jika AI menyatakan bahaya)
+     */
+    public function store(Request $request)
+    {
+        $request->validate([
+            'device_token'       => 'required|exists:devices,device_token',
+            'detected_text'      => 'required|string',
+            'app_name'           => 'required|string',
+            'risk_level'         => 'required|in:low,medium,high,critical',
+            'incident_timestamp' => 'required|date',
+            'pelaku_identitas'   => 'nullable|string', // Menerima Nomor WA/Username IG
+            'screenshot'         => 'nullable|image|mimes:jpeg,png,jpg|max:5120',
+        ]);
+
+        try {
+            $device = Device::query()->with('child.user')->where('device_token', $request->device_token)->firstOrFail();
+            $screenshotPath = null;
+
+            if ($request->hasFile('screenshot')) {
+                $file = $request->file('screenshot');
+                $filename = time() . '_' . uniqid() . '.' . $file->getClientOriginalExtension();
+                $screenshotPath = $file->storeAs('incidents', $filename, 'public');
+            }
+
+            $incident = Incident::create([
+                'device_id'          => $device->id,
+                'incident_timestamp' => $request->incident_timestamp,
+                'detected_text'      => $request->detected_text,
+                'app_name'           => $request->app_name,
+                'risk_level'         => $request->risk_level,
+                'pelaku_identitas'   => $request->pelaku_identitas ?? 'Tidak Diketahui',
+                'screenshot_path'    => $screenshotPath ? '/storage/' . $screenshotPath : null,
+            ]);
+
+            // Eksekusi Push Notification ke HP Orang Tua secara Real-Time
+            $parentUser = $device->child->user;
+            if ($parentUser && $parentUser->fcm_token) {
+                $this->sendFcmNotification(
+                    $parentUser->fcm_token, 
+                    $device->child->nama, 
+                    $request->app_name, 
+                    $incident->pelaku_identitas
+                );
+            }
+
+            return response()->json([
+                'status'  => 'success', 
+                'message' => 'Insiden dicatat dan Notifikasi terkirim.'
+            ], 201);
+
+        } catch (\Exception $e) {
+            Log::error('Incident failed: ' . $e->getMessage());
+            return response()->json([
+                'status'  => 'error', 
+                'message' => 'Gagal memproses sistem.'
+            ], 500);
+        }
+    }
+
+    /**
+     * Fungsi Privat Terisolasi untuk mengirim Payload ke Firebase Google
+     */
+    private function sendFcmNotification($fcmToken, $childName, $appName, $pelaku)
+    {
+        try {
+            // PASTIKAN: Anda harus menaruh file firebase_credentials.json di dalam folder storage/app/
+            $factory = (new Factory)->withServiceAccount(storage_path('app/firebase_credentials.json'));
+            $messaging = $factory->createMessaging();
+
+            $title = "⚠️ Bahaya pada perangkat $childName!";
+            $body = "Terdeteksi obrolan grooming dengan $pelaku di aplikasi $appName.";
+
+            $message = CloudMessage::withTarget('token', $fcmToken)
+                ->withNotification(Notification::create($title, $body));
+
+            $messaging->send($message);
+        } catch (\Exception $e) {
+            Log::error('FCM Error: ' . $e->getMessage());
+        }
+    }
+}
+</file>
+
+<file path="app/Http/Controllers/Api/PairingController.php">
+<?php
+
+namespace App\Http\Controllers\Api;
+
+use App\Http\Controllers\Controller;
+use App\Models\Child;
+use App\Models\Device;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+
+class PairingController extends Controller
+{
+    public function pairDevice(Request $request)
+    {
+        $validated = $request->validate([
+            'child_name'   => 'required|string|max:255',
+            'device_token' => 'required|string|max:255|unique:devices,device_token', 
+        ]);
+
+        DB::beginTransaction();
+        
+        try {
+            // Buat entitas Child yang terikat dengan Parent (User) yang sedang login
+            $child = Child::create([
+                'user_id' => $request->user()->id,
+                'nama'    => $validated['child_name'],
+            ]);
+
+            // Ikat UUID QR Code ke entitas Child
+            $device = Device::create([
+                'child_id'     => $child->id,
+                'device_token' => $validated['device_token'],
+            ]);
+
+            DB::commit();
+
+            return response()->json([
+                'status'  => 'success',
+                'message' => 'Perangkat anak berhasil dihubungkan.',
+                'data'    => [
+                    'child_id'  => $child->id,
+                    'device_id' => $device->id
+                ]
+            ], 201);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Pairing failed: ' . $e->getMessage());
+            
+            return response()->json([
+                'status'  => 'error',
+                'message' => 'Terjadi kesalahan sistem saat melakukan pairing.'
+            ], 500);
+        }
+    }
+    // Tambahkan di dalam PairingController
+    public function checkStatus($token)
+    {
+        // O(1) Lookup menggunakan index
+        $isPaired = Device::query()->where('device_token', $token)->exists();
+        
+        return response()->json([
+            'status' => $isPaired ? 'paired' : 'waiting'
+        ]);
+    }
+}
+</file>
+
+<file path="app/Http/Controllers/AuthController.php">
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Models\User;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Validation\Rules;
+
+class AuthController extends Controller
+{
+    // --- REGISTER ---
+    public function showRegisterForm()
+    {
+        return view('auth.register');
+    }
+
+    public function register(Request $request)
+    {
+        $request->validate([
+            'name' => ['required', 'string', 'max:255'],
+            'email' => ['required', 'string', 'email', 'max:255', 'unique:users'],
+            'password' => ['required', 'confirmed', Rules\Password::defaults()],
+        ]);
+
+        $user = User::create([
+            'name' => $request->name,
+            'email' => $request->email,
+            'password' => Hash::make($request->password),
+        ]);
+
+        Auth::login($user);
+
+        return redirect()->route('dashboard');
+    }
+
+    // --- LOGIN ---
+    public function showLoginForm()
+    {
+        return view('auth.login');
+    }
+
+    public function login(Request $request)
+    {
+        $credentials = $request->validate([
+            'email' => ['required', 'email'],
+            'password' => ['required'],
+        ]);
+
+        if (Auth::attempt($credentials, $request->boolean('remember'))) {
+            $request->session()->regenerate();
+            return redirect()->intended('dashboard');
+        }
+
+        return back()->withErrors([
+            'email' => 'The provided credentials do not match our records.',
+        ])->onlyInput('email');
+    }
+
+    // --- LOGOUT ---
+    public function logout(Request $request)
+    {
+        Auth::logout();
+        $request->session()->invalidate();
+        $request->session()->regenerateToken();
+        return redirect('/login');
+    }
+}
+</file>
+
+<file path="app/Http/Controllers/Controller.php">
+<?php
+
+namespace App\Http\Controllers;
+
+abstract class Controller
+{
+    //
+}
+</file>
+
+<file path="app/Http/Controllers/DashboardController.php">
+<?php
+
+namespace App\Http\Controllers;
+
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
+use App\Models\Incident;
+
+class DashboardController extends Controller
+{
+    public function index()
+    {
+        $user = Auth::user();
+        $deviceIds = $user->devices()->pluck('devices.id');
+
+        $incidents = Incident::whereIn('device_id', $deviceIds)
+                            ->with('device.child')
+                            ->latest('incident_timestamp')
+                            ->paginate(20);
+
+        return view('dashboard', ['incidents' => $incidents]);
+    }
+
+    public function fetchIncidents(Request $request)
+    {
+        $user = Auth::user();
+        $deviceIds = $user->devices()->pluck('devices.id');
+
+        $incidents = Incident::whereIn('device_id', $deviceIds)
+                            ->with('device.child')
+                            ->latest('incident_timestamp')
+                            ->paginate(20);
+
+        return response()->json($incidents);
+    }
+}
+</file>
+
+<file path="app/Models/Child.php">
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Model;
+
+class Child extends Model
+{
+    use HasFactory;
+
+    protected $fillable = [
+        'user_id',
+        'nama',
+    ];
+
+    // Relasi: 1 Child dimiliki 1 User
+    public function user()
+    {
+        return $this->belongsTo(User::class);
+    }
+
+    // Relasi: 1 Child punya banyak Device
+    public function devices()
+    {
+        return $this->hasMany(Device::class);
+    }
+}
+</file>
+
+<file path="app/Models/Device.php">
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Model;
+
+class Device extends Model
+{
+    use HasFactory;
+
+    protected $fillable = [
+        'child_id',
+        'device_token',
+    ];
+
+    // Relasi: 1 Device dimiliki 1 Child
+    public function child()
+    {
+        return $this->belongsTo(Child::class);
+    }
+
+    // Relasi: 1 Device punya banyak Incident
+    public function incidents()
+    {
+        return $this->hasMany(Incident::class);
+    }
+}
+</file>
+
+<file path="app/Models/Incident.php">
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Model;
+
+class Incident extends Model
+{
+    use HasFactory;
+
+    protected $fillable = [
+        'device_id',
+        'incident_timestamp',
+        'detected_text',
+        'app_name',
+        'risk_level',
+        'pelaku_identitas', // <-- Wajib dimasukkan ke fillable
+        'screenshot_path',
+    ];
+
+    protected $casts = [
+        'incident_timestamp' => 'datetime',
+    ];
+
+    // Relasi: 1 Incident terjadi di 1 Device
+    public function device()
+    {
+        return $this->belongsTo(Device::class);
+    }
+}
+</file>
+
+<file path="app/Models/User.php">
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Foundation\Auth\User as Authenticatable;
+use Illuminate\Notifications\Notifiable;
+use Laravel\Sanctum\HasApiTokens;
+
+class User extends Authenticatable
+{
+    use HasApiTokens, HasFactory, Notifiable;
+
+    protected $fillable = [
+        'name',
+        'email',
+        'password',
+        'fcm_token', // <-- Wajib dimasukkan untuk Push Notification
+    ];
+
+    protected $hidden = [
+        'password',
+        'remember_token',
+    ];
+
+    protected function casts(): array
+    {
+        return [
+            'email_verified_at' => 'datetime',
+            'password' => 'hashed',
+        ];
+    }
+
+    public function children()
+    {
+        return $this->hasMany(Child::class);
+    }
+
+    public function devices()
+    {
+        return $this->hasManyThrough(Device::class, Child::class);
+    }
+}
+</file>
+
+<file path="app/Providers/AppServiceProvider.php">
+<?php
+
+namespace App\Providers;
+
+use Illuminate\Support\ServiceProvider;
+
+class AppServiceProvider extends ServiceProvider
+{
+    /**
+     * Register any application services.
+     */
+    public function register(): void
+    {
+        //
+    }
+
+    /**
+     * Bootstrap any application services.
+     */
+    public function boot(): void
+    {
+        //
+    }
+}
+</file>
+
+<file path="database/migrations/0001_01_01_000000_create_users_table.php">
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    /**
+     * Run the migrations.
+     */
+    public function up(): void
+    {
+        Schema::create('users', function (Blueprint $table) {
+            $table->id();
+            $table->string('name');
+            $table->string('email')->unique();
+            $table->timestamp('email_verified_at')->nullable();
+            $table->string('password');
+            $table->rememberToken();
+            $table->timestamps();
+        });
+
+        Schema::create('password_reset_tokens', function (Blueprint $table) {
+            $table->string('email')->primary();
+            $table->string('token');
+            $table->timestamp('created_at')->nullable();
+        });
+
+        Schema::create('sessions', function (Blueprint $table) {
+            $table->string('id')->primary();
+            $table->foreignId('user_id')->nullable()->index();
+            $table->string('ip_address', 45)->nullable();
+            $table->text('user_agent')->nullable();
+            $table->longText('payload');
+            $table->integer('last_activity')->index();
+        });
+    }
+
+    /**
+     * Reverse the migrations.
+     */
+    public function down(): void
+    {
+        Schema::dropIfExists('users');
+        Schema::dropIfExists('password_reset_tokens');
+        Schema::dropIfExists('sessions');
+    }
+};
+</file>
+
+<file path="database/migrations/0001_01_01_000001_create_cache_table.php">
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    /**
+     * Run the migrations.
+     */
+    public function up(): void
+    {
+        Schema::create('cache', function (Blueprint $table) {
+            $table->string('key')->primary();
+            $table->mediumText('value');
+            $table->integer('expiration');
+        });
+
+        Schema::create('cache_locks', function (Blueprint $table) {
+            $table->string('key')->primary();
+            $table->string('owner');
+            $table->integer('expiration');
+        });
+    }
+
+    /**
+     * Reverse the migrations.
+     */
+    public function down(): void
+    {
+        Schema::dropIfExists('cache');
+        Schema::dropIfExists('cache_locks');
+    }
+};
+</file>
+
+<file path="database/migrations/0001_01_01_000002_create_jobs_table.php">
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    /**
+     * Run the migrations.
+     */
+    public function up(): void
+    {
+        Schema::create('jobs', function (Blueprint $table) {
+            $table->id();
+            $table->string('queue')->index();
+            $table->longText('payload');
+            $table->unsignedTinyInteger('attempts');
+            $table->unsignedInteger('reserved_at')->nullable();
+            $table->unsignedInteger('available_at');
+            $table->unsignedInteger('created_at');
+        });
+
+        Schema::create('job_batches', function (Blueprint $table) {
+            $table->string('id')->primary();
+            $table->string('name');
+            $table->integer('total_jobs');
+            $table->integer('pending_jobs');
+            $table->integer('failed_jobs');
+            $table->longText('failed_job_ids');
+            $table->mediumText('options')->nullable();
+            $table->integer('cancelled_at')->nullable();
+            $table->integer('created_at');
+            $table->integer('finished_at')->nullable();
+        });
+
+        Schema::create('failed_jobs', function (Blueprint $table) {
+            $table->id();
+            $table->string('uuid')->unique();
+            $table->text('connection');
+            $table->text('queue');
+            $table->longText('payload');
+            $table->longText('exception');
+            $table->timestamp('failed_at')->useCurrent();
+        });
+    }
+
+    /**
+     * Reverse the migrations.
+     */
+    public function down(): void
+    {
+        Schema::dropIfExists('jobs');
+        Schema::dropIfExists('job_batches');
+        Schema::dropIfExists('failed_jobs');
+    }
+};
+</file>
+
+<file path="database/migrations/2025_11_10_023837_create_children_table.php">
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    /**
+     * Run the migrations.
+     */
+    public function up(): void
+    {
+        Schema::create('children', function (Blueprint $table) {
+            $table->id();
+            // Ini adalah Foreign Key ke tabel 'users' (orang tua)
+            $table->foreignId('user_id')->constrained()->onDelete('cascade');
+            $table->string('nama');
+            $table->timestamps();
+        });
+    }
+
+    /**
+     * Reverse the migrations.
+     */
+    public function down(): void
+    {
+        Schema::dropIfExists('children');
+    }
+};
+</file>
+
+<file path="database/migrations/2025_11_10_023838_create_devices_table.php">
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    /**
+     * Run the migrations.
+     */
+    public function up(): void
+    {
+        Schema::create('devices', function (Blueprint $table) {
+            $table->id();
+            // Ini adalah Foreign Key ke tabel 'children'
+            $table->foreignId('child_id')->constrained()->onDelete('cascade');
+            // Token unik untuk identifikasi perangkat
+            $table->string('device_token')->unique();
+            $table->timestamps();
+        });
+    }
+
+    /**
+     * Reverse the migrations.
+     */
+    public function down(): void
+    {
+        Schema::dropIfExists('devices');
+    }
+};
+</file>
+
+<file path="database/migrations/2025_11_10_023839_create_incidents_table.php">
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    /**
+     * Run the migrations.
+     */
+    public function up(): void
+    {
+        Schema::create('incidents', function (Blueprint $table) {
+            $table->id();
+            // Ini adalah Foreign Key ke tabel 'devices'
+            $table->foreignId('device_id')->constrained()->onDelete('cascade');
+            
+            // Waktu kapan insiden ini terdeteksi di HP anak
+            $table->timestamp('incident_timestamp'); 
+            
+            // Teks yang terdeteksi, pakai 'text' karena bisa sangat panjang
+            $table->text('detected_text'); 
+            
+            // Nama aplikasi (misal: "WhatsApp", "Instagram DM")
+            $table->string('app_name'); 
+            
+            // Sebaiknya pakai ENUM untuk level risiko
+            $table->enum('risk_level', ['low', 'medium', 'high', 'critical']); 
+            
+            // Path ke file screenshot, nullable jika gagal ambil
+            $table->string('screenshot_path')->nullable(); 
+            
+            // Ini (created_at) adalah waktu kapan data masuk ke database kita
+            $table->timestamps(); 
+        });
+    }
+
+    /**
+     * Reverse the migrations.
+     */
+    public function down(): void
+    {
+        Schema::dropIfExists('incidents');
+    }
+};
+</file>
+
+<file path="database/migrations/2026_04_28_074747_create_personal_access_tokens_table.php">
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    /**
+     * Run the migrations.
+     */
+    public function up(): void
+    {
+        Schema::create('personal_access_tokens', function (Blueprint $table) {
+            $table->id();
+            $table->morphs('tokenable');
+            $table->text('name');
+            $table->string('token', 64)->unique();
+            $table->text('abilities')->nullable();
+            $table->timestamp('last_used_at')->nullable();
+            $table->timestamp('expires_at')->nullable()->index();
+            $table->timestamps();
+        });
+    }
+
+    /**
+     * Reverse the migrations.
+     */
+    public function down(): void
+    {
+        Schema::dropIfExists('personal_access_tokens');
+    }
+};
+</file>
+
+<file path="database/migrations/2026_04_28_111447_add_pelaku_to_incidents_table.php">
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    /**
+     * Run the migrations.
+     */
+    public function up(): void
+{
+    Schema::table('incidents', function (Blueprint $table) {
+        $table->string('pelaku_identitas')->nullable()->after('app_name');
+    });
+}
+public function down(): void
+{
+    Schema::table('incidents', function (Blueprint $table) {
+        $table->dropColumn('pelaku_identitas');
+    });
+}
+};
+</file>
+
+<file path="database/migrations/2026_04_28_113846_add_fcm_token_to_users_table.php">
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::table('users', function (Blueprint $table) {
+            // Kita butuh fcm_token untuk mengirim notifikasi ke HP orang tua
+            $table->text('fcm_token')->nullable()->after('remember_token');
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::table('users', function (Blueprint $table) {
+            $table->dropColumn('fcm_token');
+        });
+    }
+};
+</file>
+
+<file path="resources/views/auth/login.blade.php">
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 flex items-center justify-center h-screen">
+    <div class="w-full max-w-md p-8 space-y-6 bg-white rounded-lg shadow-md">
+        <h2 class="text-2xl font-bold text-center text-gray-900">Login</h2>
+        
+        @if ($errors->any())
+            <div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative" role="alert">
+                <ul class="list-disc list-inside">
+                    @foreach ($errors->all() as $error)
+                        <li>{{ $error }}</li>
+                    @endforeach
+                </ul>
+            </div>
+        @endif
+
+        <form method="POST" action="{{ route('login') }}" class="space-y-6">
+            @csrf
+            <div>
+                <label for="email" class="block text-sm font-medium text-gray-700">Email</label>
+                <input id="email" name="email" type="email" value="{{ old('email') }}" required autofocus
+                       class="w-full px-3 py-2 mt-1 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500">
+            </div>
+            <div>
+                <label for="password" class="block text-sm font-medium text-gray-700">Password</label>
+                <input id="password" name="password" type="password" required
+                       class="w-full px-3 py-2 mt-1 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500">
+            </div>
+            <div class="flex items-center justify-between">
+                <div class="flex items-center">
+                    <input id="remember" name="remember" type="checkbox"
+                           class="w-4 h-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500">
+                    <label for="remember" class="block ml-2 text-sm text-gray-900">Remember me</label>
+                </div>
+            </div>
+            <div>
+                <button type="submit"
+                        class="w-full px-4 py-2 text-sm font-medium text-white bg-indigo-600 border border-transparent rounded-md shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                    Sign in
+                </button>
+            </div>
+            <p class="text-sm text-center text-gray-600">
+                Belum punya akun? <a href="{{ route('register') }}" class="font-medium text-indigo-600 hover:text-indigo-500">Register di sini</a>
+            </p>
+        </form>
+    </div>
+</body>
+</html>
+</file>
+
+<file path="resources/views/auth/register.blade.php">
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Register</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 flex items-center justify-center min-h-screen">
+    <div class="w-full max-w-md p-8 space-y-6 bg-white rounded-lg shadow-md my-8">
+        <h2 class="text-2xl font-bold text-center text-gray-900">Register Akun Baru</h2>
+        
+        @if ($errors->any())
+            <div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative" role="alert">
+                <ul class="list-disc list-inside">
+                    @foreach ($errors->all() as $error)
+                        <li>{{ $error }}</li>
+                    @endforeach
+                </ul>
+            </div>
+        @endif
+
+        <form method="POST" action="{{ route('register') }}" class="space-y-6">
+            @csrf
+            <div>
+                <label for="name" class="block text-sm font-medium text-gray-700">Nama</label>
+                <input id="name" name="name" type="text" value="{{ old('name') }}" required autofocus
+                       class="w-full px-3 py-2 mt-1 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500">
+            </div>
+            <div>
+                <label for="email" class="block text-sm font-medium text-gray-700">Email</label>
+                <input id="email" name="email" type="email" value="{{ old('email') }}" required
+                       class="w-full px-3 py-2 mt-1 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500">
+            </div>
+            <div>
+                <label for="password" class="block text-sm font-medium text-gray-700">Password</label>
+                <input id="password" name="password" type="password" required
+                       class="w-full px-3 py-2 mt-1 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500">
+            </div>
+            <div>
+                <label for="password_confirmation" class="block text-sm font-medium text-gray-700">Konfirmasi Password</label>
+                <input id="password_confirmation" name="password_confirmation" type="password" required
+                       class="w-full px-3 py-2 mt-1 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500">
+            </div>
+            <div>
+                <button type="submit"
+                        class="w-full px-4 py-2 text-sm font-medium text-white bg-indigo-600 border border-transparent rounded-md shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                    Register
+                </button>
+            </div>
+            <p class="text-sm text-center text-gray-600">
+                Sudah punya akun? <a href="{{ route('login') }}" class="font-medium text-indigo-600 hover:text-indigo-500">Login di sini</a>
+            </p>
+        </form>
+    </div>
+</body>
+</html>
+</file>
+
+<file path="resources/views/dashboard.blade.php">
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Parent Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .critical-alert { border-left: 4px solid #ef4444; }
+        .high-alert { border-left: 4px solid #f97316; }
+        .medium-alert { border-left: 4px solid #eab308; }
+        .low-alert { border-left: 4px solid #22c55e; }
+    </style>
+</head>
+<body class="bg-gray-100 font-sans">
+
+    <nav class="bg-white border-b border-gray-100">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16">
+                <div class="flex">
+                    <div class="shrink-0 flex items-center">
+                        <h1 class="text-xl font-bold text-gray-800">Dashboard Orang Tua</h1>
+                    </div>
+                </div>
+                <div class="flex items-center">
+                    <form method="POST" action="{{ route('logout') }}">
+                        @csrf
+                        <button type="submit" class="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-gray-500 bg-white hover:text-gray-700 focus:outline-none transition ease-in-out duration-150">
+                            Logout ({{ Auth::user()->name }})
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="py-12">
+        <div class="max-w-7xl mx-auto sm:px-6 lg:px-8">
+            <div class="bg-white overflow-hidden shadow-sm sm:rounded-lg">
+                <div class="p-6 text-gray-900">
+                    <h2 class="text-2xl font-bold text-gray-800 mb-6">Peringatan Terdeteksi</h2>
+                    <div id="incidents-list" class="space-y-4"></div>
+                    <div id="pagination-links" class="mt-6 text-center"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const initialData = @json($incidents);
+
+        document.addEventListener('DOMContentLoaded', function() {
+            const incidentsList = document.getElementById('incidents-list');
+            const paginationLinks = document.getElementById('pagination-links');
+
+            function formatDate(dateString) {
+                const options = { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' };
+                return new Date(dateString).toLocaleDateString('id-ID', options);
+            }
+            
+            function getRiskStyles(level) {
+                switch (level) {
+                    case 'critical': return 'border-red-500 text-red-700';
+                    case 'high': return 'border-orange-500 text-orange-700';
+                    case 'medium': return 'border-yellow-500 text-yellow-700';
+                    default: return 'border-gray-400 text-gray-600';
+                }
+            }
+
+            function renderIncidents(incidents) {
+                incidentsList.innerHTML = '';
+                if (incidents.length === 0) {
+                    incidentsList.innerHTML = `<p class="text-gray-500">Tidak ada peringatan ditemukan.</p>`;
+                    return;
+                }
+                incidents.forEach(incident => {
+                    const riskStyles = getRiskStyles(incident.risk_level);
+                    const card = `
+                        <div class="bg-white p-4 rounded-lg shadow ${riskStyles}" style="border-left-width: 4px;">
+                            <div class="flex justify-between items-center mb-2">
+                                <span class="text-sm font-semibold text-gray-500">Aplikasi: ${escapeHTML(incident.app_name)}</span>
+                                <span class="text-sm text-gray-500">${formatDate(incident.incident_timestamp)}</span>
+                            </div>
+                            <p class="text-gray-800 text-base">"${escapeHTML(incident.detected_text)}"</p>
+                            <div class="mt-3 text-xs text-gray-500">
+                                <span>Anak: ${incident.device.child.nama}</span> |
+                                <span>Level: <span class="font-bold ${riskStyles}">${escapeHTML(incident.risk_level)}</span></span>
+                            </div>
+                        </div>
+                    `;
+                    incidentsList.innerHTML += card;
+                });
+            }
+
+            function renderPagination(data) {
+                paginationLinks.innerHTML = '';
+                data.links.forEach(link => {
+                    if (link.url) {
+                        const button = document.createElement('button');
+                        button.innerHTML = link.label.replace('&laquo; Previous', 'Sebelumnya').replace('Next &raquo;', 'Berikutnya');
+                        button.className = `px-3 py-1 mx-1 rounded ${link.active ? 'bg-blue-500 text-white' : 'bg-white text-blue-500'} ${link.url === null ? 'opacity-50 cursor-not-allowed' : 'hover:bg-blue-100 border'}`;
+                        if (link.url) {
+                            const url = new URL(link.url);
+                            const page = url.searchParams.get('page');
+                            button.onclick = (e) => {
+                                e.preventDefault();
+                                fetchIncidents(page);
+                            };
+                        }
+                        paginationLinks.appendChild(button);
+                    }
+                });
+            }
+
+            async function fetchIncidents(page) {
+                const url = `{{ route('dashboard.fetch') }}?page=${page}`;
+                try {
+                    const response = await fetch(url, { headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' } });
+                    const data = await response.json();
+                    renderIncidents(data.data);
+                    renderPagination(data);
+                    window.scrollTo(0, 0);
+                } catch (error) { console.error('Gagal fetch paginasi:', error); }
+            }
+            
+            function escapeHTML(str) {
+                if (!str) return '';
+                return str.replace(/[&<>"']/g, m => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;'}[m]));
+            }
+
+            renderIncidents(initialData.data);
+            renderPagination(initialData);
+        });
+    </script>
+</body>
+</html>
+</file>
+
+<file path="routes/api.php">
+<?php
+
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Route;
+use App\Http\Controllers\Api\ApiAuthController;
+use App\Http\Controllers\Api\PairingController;
+use App\Http\Controllers\Api\IncidentController;
+
+// Rute Publik
+Route::post('/login', [ApiAuthController::class, 'login']);
+Route::post('/incidents', [IncidentController::class, 'store']); // HP Anak menembak ke sini, tidak pakai token Sanctum karena pakai UUID
+Route::get('/device/status/{token}', [\App\Http\Controllers\Api\PairingController::class, 'checkStatus']);
+
+// Rute Terlindungi (Aplikasi Orang Tua dengan Bearer Token)
+Route::middleware('auth:sanctum')->group(function () {
+    Route::post('/logout', [ApiAuthController::class, 'logout']);
+    Route::get('/user', function (Request $request) { return $request->user(); });
+    
+    // Rute Operasional Orang Tua
+    Route::post('/device/pair', [PairingController::class, 'pairDevice']);
+    Route::get('/incidents', [IncidentController::class, 'index']);
+});
+</file>
+
+<file path="routes/console.php">
+<?php
+
+use Illuminate\Foundation\Inspiring;
+use Illuminate\Support\Facades\Artisan;
+
+Artisan::command('inspire', function () {
+    $this->comment(Inspiring::quote());
+})->purpose('Display an inspiring quote');
+</file>
+
+<file path="routes/web.php">
+<?php
+
+use Illuminate\Support\Facades\Route;
+use App\Http\Controllers\AuthController;
+use App\Http\Controllers\DashboardController;
+
+// Homepage: Redirect ke login
+Route::get('/', function () {
+    return redirect()->route('login');
+});
+
+// --- Rute untuk Tamu (Guest) ---
+Route::middleware('guest')->group(function () {
+    // Register
+    Route::get('register', [AuthController::class, 'showRegisterForm'])->name('register');
+    Route::post('register', [AuthController::class, 'register']);
+    
+    // Login
+    Route::get('login', [AuthController::class, 'showLoginForm'])->name('login');
+    Route::post('login', [AuthController::class, 'login']);
+});
+
+// --- Rute yang Dilindungi (Harus Login) ---
+Route::middleware('auth')->group(function () {
+    // Dashboard
+    Route::get('dashboard', [DashboardController::class, 'index'])->name('dashboard');
+    Route::get('dashboard/fetch', [DashboardController::class, 'fetchIncidents'])->name('dashboard.fetch');
+
+    // Logout
+    Route::post('logout', [AuthController::class, 'logout'])->name('logout');
+});
+</file>
+
+</files>

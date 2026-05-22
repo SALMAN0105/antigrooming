@@ -1,0 +1,1332 @@
+This file is a merged representation of a subset of the codebase, containing specifically included files, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of a subset of the repository's contents that is considered the most important context.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Only files matching these patterns are included: android/app/src/main/kotlin/com/example/agent_app, android/app/src/main/res/xml, android/app/src/main/AndroidManifest.xml, android/app/src/profile, lib
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+android/app/src/main/AndroidManifest.xml
+android/app/src/main/kotlin/com/example/agent_app/ChatMonitorService.kt
+android/app/src/main/kotlin/com/example/agent_app/MainActivity.kt
+android/app/src/main/kotlin/com/example/agent_app/ScreenshotManager.kt
+android/app/src/main/res/xml/accessibility_service_config.xml
+android/app/src/main/res/xml/network_security_config.xml
+android/app/src/profile/AndroidManifest.xml
+lib/api_config.dart
+lib/main.dart
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="android/app/src/main/AndroidManifest.xml">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.BIND_ACCESSIBILITY_SERVICE"
+        android:protectionLevel="signature" />
+
+    
+    <application
+        android:label="agent_app"
+        android:name="${applicationName}"
+        android:icon="@mipmap/ic_launcher"
+        android:networkSecurityConfig="@xml/network_security_config">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:taskAffinity=""
+            android:theme="@style/LaunchTheme"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true"
+            android:windowSoftInputMode="adjustResize">
+            <meta-data
+              android:name="io.flutter.embedding.android.NormalTheme"
+              android:resource="@style/NormalTheme"
+              />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+        
+        <service
+            android:name=".ChatMonitorService"
+            android:enabled="true"
+            android:exported="false"
+            android:label="Layanan AntiGrooming"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:foregroundServiceType="mediaProjection">    
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+        <meta-data
+            android:name="flutterEmbedding"
+            android:value="2" />
+    </application>
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.PROCESS_TEXT"/>
+            <data android:mimeType="text/plain"/>
+        </intent>
+    </queries>
+</manifest>
+</file>
+
+<file path="android/app/src/main/kotlin/com/example/agent_app/ChatMonitorService.kt">
+package com.example.agent_app
+
+import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.AccessibilityServiceInfo
+import android.app.Activity
+import android.app.Notification
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.PixelFormat
+import android.hardware.display.DisplayManager
+import android.hardware.display.VirtualDisplay
+import android.media.ImageReader
+import android.media.projection.MediaProjection
+import android.media.projection.MediaProjectionManager
+import android.os.Handler
+import android.os.Looper
+import android.util.DisplayMetrics
+import android.util.Log
+import android.view.WindowManager
+import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
+import androidx.core.app.NotificationCompat
+import io.flutter.embedding.engine.FlutterEngineCache
+import io.flutter.plugin.common.MethodChannel
+import java.io.File
+import java.io.FileOutputStream
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+class ChatMonitorService : AccessibilityService() {
+
+    private val TAG = "ChatMonitorService"
+    private val NOTIFICATION_CHANNEL_ID = "ChatMonitorServiceChannel"
+    private val NOTIFICATION_ID = 1
+
+    // Objek-objek untuk Screenshot
+    private var mediaProjectionManager: MediaProjectionManager? = null
+    private var mediaProjection: MediaProjection? = null
+    private var virtualDisplay: VirtualDisplay? = null
+    private var imageReader: ImageReader? = null
+    private var windowManager: WindowManager? = null
+    private var displayMetrics: DisplayMetrics? = null
+
+    // Jembatan untuk "melempar" data ke Dart
+    private var channel: MethodChannel? = null
+
+    private val handler = Handler(Looper.getMainLooper())
+    private var scanRunnable: Runnable? = null
+    private val recentTexts = mutableSetOf<String>()
+    
+    // Fungsi "Pemburu Teks" (Rekursif)
+    private fun traverseNodes(node: AccessibilityNodeInfo?, foundTexts: MutableList<String>) {
+        if (node == null) return
+
+        try {
+            val className = node.className?.toString() ?: ""
+            if (className == "android.widget.EditText") {
+                return
+            }
+
+            if (className == "android.widget.TextView" && 
+                node.text != null && 
+                node.text.isNotBlank()) {
+                
+                val foundText = node.text.toString().trim()
+                
+                if (foundText.length > 1 && !recentTexts.contains(foundText)) {
+                    foundTexts.add(foundText)
+                }
+            }
+
+            for (i in 0 until node.childCount) {
+                val childNode = node.getChild(i)
+                if (childNode != null) {
+                    traverseNodes(childNode, foundTexts)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error saat traverse node: ${e.message}")
+        }
+    }
+
+    // Fungsi onAccessibilityEvent (Di-update)
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (event == null) return
+
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
+            
+            val packageName = event.packageName?.toString() ?: ""
+            if (!isMonitoredPackage(packageName)) return
+
+            scanRunnable?.let { handler.removeCallbacks(it) }
+            
+            scanRunnable = Runnable {
+                val rootNode = rootInActiveWindow ?: return@Runnable
+                
+                Log.d(TAG, "--- DEBOUNCE SELESAI: Memulai Scan ---")
+                
+                val allFoundTexts = mutableListOf<String>()
+                traverseNodes(rootNode, allFoundTexts)
+                rootNode.recycle() 
+
+                if (allFoundTexts.isEmpty()) {
+                    return@Runnable
+                }
+
+                val targetText = allFoundTexts.maxByOrNull { it.length }
+
+                if (targetText != null && targetText.length > 2) {
+                    Log.d(TAG, "=================================================")
+                    Log.d(TAG, "TEKS TERPILIH (TERPANJANG)")
+                    Log.d(TAG, "Aplikasi: $packageName")
+                    Log.d(TAG, "Teks: $targetText")
+                    Log.d(TAG, "Score:")
+                    Log.d(TAG, "=================================================")
+                    
+                    recentTexts.add(targetText)
+                    if (recentTexts.size > 50) {
+                        recentTexts.remove(recentTexts.first())
+                    }
+
+                    // Ambil Screenshot dan kirim ke Flutter/Dart
+                    takeScreenshotAndUpload(
+                        text = targetText,
+                        appName = mapPackageToAppName(packageName),
+                        deviceToken = "TOKEN-TES-123"
+                    )
+                }
+            }
+            
+            handler.postDelayed(scanRunnable!!, 1500)
+        }
+    }
+    
+    // Fungsi: Pemicu Screenshot
+    private fun takeScreenshotAndUpload(text: String, appName: String, deviceToken: String, rootNode: AccessibilityNodeInfo, packageName: String) {
+        val pelakuIdentitas = extractPelakuIdentity(rootNode, packageName)
+        
+        if (mediaProjection == null) {
+            sendToFlutter(text, appName, deviceToken, null, pelakuIdentitas)
+            return
+        }
+
+        Log.d(TAG, "📸 Memulai pengambilan screenshot...")
+
+        val image = imageReader?.acquireLatestImage()
+        if (image == null) {
+            Log.e(TAG, "❌ Gagal ambil screenshot: imageReader 'acquireLatestImage' gagal.")
+            sendToFlutter(text, appName, deviceToken, null)
+            return
+        }
+
+        try {
+            val planes = image.planes
+            val buffer = planes[0].buffer
+            val pixelStride = planes[0].pixelStride
+            val rowStride = planes[0].rowStride
+            val rowPadding = rowStride - pixelStride * displayMetrics!!.widthPixels
+
+            val bitmap = Bitmap.createBitmap(
+                displayMetrics!!.widthPixels + rowPadding / pixelStride,
+                displayMetrics!!.heightPixels,
+                Bitmap.Config.ARGB_8888
+            )
+            bitmap.copyPixelsFromBuffer(buffer)
+            image.close()
+
+            // Simpan bitmap ke file cache
+            val file = saveBitmapToFile(bitmap)
+        if (file != null) {
+            sendToFlutter(text, appName, deviceToken, file.absolutePath, pelakuIdentitas)
+        } else {
+            sendToFlutter(text, appName, deviceToken, null, pelakuIdentitas)
+        }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error saat memproses screenshot: ${e.message}")
+            e.printStackTrace()
+            sendToFlutter(text, appName, deviceToken, null)
+        }
+    }
+
+    // Fungsi: Penyimpan Bitmap
+   private fun saveBitmapToFile(bitmap: Bitmap): File? {
+        val cacheDir = applicationContext.cacheDir 
+        val timestamp = System.currentTimeMillis()
+        // 1. UBAH EKSTENSI MENJADI JPG
+        val file = File(cacheDir, "ss_$timestamp.jpg") 
+        
+        return try {
+            val fos = FileOutputStream(file)
+            // 2. UBAH KOMPRESI KE JPEG DENGAN KUALITAS 70%
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 70, fos) 
+            fos.flush()
+            fos.close()
+            file
+        } catch (e: Exception) {
+            Log.e(TAG, "Gagal simpan file screenshot: ${e.message}")
+            e.printStackTrace()
+            null
+        }
+    }
+
+    // Fungsi: Kirim data ke FLUTTER/DART
+    private fun sendToFlutter(text: String, appName: String, deviceToken: String, screenshotPath: String?, pelakuIdentitas: String) {
+        if (channel == null) return
+        val timestamp = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).format(Date())
+        
+        val data = mapOf(
+            "text" to text,
+            "appName" to appName,
+            "deviceToken" to deviceToken,
+            "timestamp" to timestamp,
+            "screenshotPath" to screenshotPath,
+            "pelaku_identitas" to pelakuIdentitas // <-- DATA BARU
+        )
+        handler.post { channel?.invokeMethod("uploadIncident", data) }
+    }
+
+    // Helper: Cek paket yang dimonitor
+    private fun isMonitoredPackage(packageName: String): Boolean {
+        return packageName in setOf(
+            "com.whatsapp", 
+            "com.whatsapp.w4b", 
+            "com.instagram.android", 
+            "com.facebook.orca"
+        )
+    }
+    
+    // Helper: Map package ke app name
+    private fun mapPackageToAppName(packageName: String): String {
+        return when (packageName) {
+            "com.whatsapp" -> "whatsapp"
+            "com.whatsapp.w4b" -> "whatsapp_business"
+            "com.instagram.android" -> "instagram"
+            "com.facebook.orca" -> "messenger"
+            else -> packageName
+        }
+    }
+
+    override fun onInterrupt() {
+        Log.e(TAG, "⚠️ Servis di-interrupt!")
+        scanRunnable?.let { handler.removeCallbacks(it) }
+        recentTexts.clear()
+        stopScreenCapture()
+    }
+
+    // Fungsi: Menghentikan Screenshot
+    private fun stopScreenCapture() {
+        virtualDisplay?.release()
+        imageReader?.close()
+        mediaProjection?.stop()
+        mediaProjection = null
+        Log.i(TAG, "Screen capture dihentikan.")
+    }
+
+    override fun onServiceConnected() {
+        super.onServiceConnected()
+        Log.i(TAG, "🔧 onServiceConnected dipanggil...")
+
+        // Inisialisasi Jembatan Flutter
+        val flutterEngine = FlutterEngineCache.getInstance().get("main_flutter_engine")
+        if (flutterEngine != null) {
+            channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.example.agent_app/service")
+            Log.i(TAG, "✅ Jembatan MethodChannel berhasil terhubung.")
+        } else {
+            Log.e(TAG, "❌ Gagal terhubung ke Flutter Engine! Pastikan 'main_flutter_engine' ada.")
+        }
+        
+        // Inisialisasi Screenshot Manager
+        windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        displayMetrics = DisplayMetrics()
+        windowManager?.defaultDisplay?.getMetrics(displayMetrics)
+        
+        mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        
+        // Ambil resultData dari ScreenshotManager (singleton object)
+        val resultData = ScreenshotManager.mediaProjectionResultData
+        if (resultData != null) {
+            try {
+                mediaProjection = mediaProjectionManager?.getMediaProjection(Activity.RESULT_OK, resultData)
+                
+                imageReader = ImageReader.newInstance(
+                    displayMetrics!!.widthPixels,
+                    displayMetrics!!.heightPixels,
+                    PixelFormat.RGBA_8888, 2
+                )
+                
+                virtualDisplay = mediaProjection?.createVirtualDisplay(
+                    "ScreenCapture",
+                    displayMetrics!!.widthPixels,
+                    displayMetrics!!.heightPixels,
+                    displayMetrics!!.densityDpi,
+                    DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                    imageReader?.surface, null, null
+                )
+                Log.i(TAG, "✅ MediaProjection (Screenshot) berhasil di-setup.")
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Gagal memulai MediaProjection: ${e.message}")
+            }
+        } else {
+            Log.e(TAG, "❌ Gagal setup screenshot: Izin MediaProjection (resultData) null.")
+        }
+
+        // Setup Foreground Service
+        val notificationIntent = Intent(this, MainActivity::class.java)
+        val pendingIntent = PendingIntent.getActivity(
+            this, 0, notificationIntent, PendingIntent.FLAG_IMMUTABLE
+        )
+        val notification: Notification = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+            .setContentTitle("Layanan AntiGrooming Aktif")
+            .setContentText("Aplikasi ini sedang memonitor chat untuk perlindungan.")
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentIntent(pendingIntent)
+            .setOngoing(true)
+            .build()
+        startForeground(NOTIFICATION_ID, notification)
+        Log.i(TAG, "✅ Foreground service dimulai.")
+        
+        // Setup Info Aksesibilitas
+        val info = AccessibilityServiceInfo().apply {
+            eventTypes = AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED or
+                         AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
+                         AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+            feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
+            packageNames = arrayOf(
+                "com.whatsapp", "com.whatsapp.w4b",
+                "com.instagram.android", "com.facebook.orca"
+            )
+            notificationTimeout = 100
+            flags = AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+        }
+        this.serviceInfo = info
+        Log.i(TAG, "✅ Layanan AntiGrooming Terhubung & Siap Memonitor!")
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        scanRunnable?.let { handler.removeCallbacks(it) }
+        recentTexts.clear()
+        stopScreenCapture()
+        Log.i(TAG, "🛑 Layanan AntiGrooming Dihentikan")
+    }
+
+    private fun extractPelakuIdentity(rootNode: AccessibilityNodeInfo?, packageName: String): String {
+        if (rootNode == null) return "Tidak Diketahui"
+
+        try {
+            // Logika Instagram: Username biasanya ada di Title Bar
+            if (packageName.contains("instagram")) {
+                val nodes = rootNode.findAccessibilityNodeInfosByViewId("com.instagram.android:id/action_bar_title")
+                if (nodes.isNotEmpty() && nodes[0].text != null) {
+                    return "@" + nodes[0].text.toString()
+                }
+            }
+            
+            // Logika WhatsApp: Nama/Nomor ada di conversation_contact_name
+            if (packageName.contains("whatsapp")) {
+                val nodes = rootNode.findAccessibilityNodeInfosByViewId("com.whatsapp:id/conversation_contact_name")
+                if (nodes.isNotEmpty() && nodes[0].text != null) {
+                    return nodes[0].text.toString()
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Gagal ekstrak identitas: \${e.message}")
+        }
+        return "Tidak Diketahui"
+    }
+}
+</file>
+
+<file path="android/app/src/main/kotlin/com/example/agent_app/MainActivity.kt">
+package com.example.agent_app
+
+import android.accessibilityservice.AccessibilityServiceInfo
+import android.app.Activity
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.content.Context
+import android.content.Intent
+import android.media.projection.MediaProjectionManager
+import android.os.Build
+import android.os.Bundle
+import android.provider.Settings
+import android.util.Log
+import android.view.accessibility.AccessibilityManager
+import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.embedding.engine.FlutterEngineCache
+import io.flutter.plugin.common.MethodChannel
+
+class MainActivity: FlutterActivity() {
+    
+    private val TAG = "MainActivity"
+    private val CHANNEL = "com.example.agent_app/service"
+    
+    // ID Notification Channel (HARUS sama dengan ChatMonitorService)
+    private val NOTIFICATION_CHANNEL_ID = "ChatMonitorServiceChannel"
+    private val NOTIFICATION_CHANNEL_NAME = "Chat Monitor Service"
+    
+    // MediaProjection untuk screenshot
+    private val SCREEN_CAPTURE_REQUEST_CODE = 1001
+    private var mediaProjectionManager: MediaProjectionManager? = null
+    
+    // Callback untuk memberitahu Flutter hasil permission
+    private var pendingResult: MethodChannel.Result? = null
+
+    override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+        super.configureFlutterEngine(flutterEngine)
+
+        Log.d(TAG, "🔧 Configuring Flutter Engine...")
+        
+        // Cache Flutter Engine agar bisa diakses dari Service
+        FlutterEngineCache
+            .getInstance()
+            .put("main_flutter_engine", flutterEngine)
+        Log.d(TAG, "✅ Flutter Engine cached with key 'main_flutter_engine'")
+        
+        // Buat notification channel saat app pertama kali dibuka
+        createNotificationChannel()
+        
+        // Init MediaProjectionManager
+        mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        Log.d(TAG, "📷 MediaProjectionManager initialized")
+
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger, 
+            CHANNEL
+        ).setMethodCallHandler { call, result ->
+
+            when (call.method) {
+                /**
+                 * Membuka halaman Accessibility Settings
+                 */
+                "requestAccessibilityPermission" -> {
+                    try {
+                        Log.d(TAG, "📱 Opening Accessibility Settings...")
+                        val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                        intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                        startActivity(intent)
+                        result.success(true) 
+                    } catch (e: Exception) {
+                        Log.e(TAG, "❌ Failed to open accessibility settings: ${e.message}")
+                        result.error("ERROR", "Gagal membuka settings", e.message)
+                    }
+                }
+                
+                /**
+                 * Cek apakah Accessibility Service sudah diaktifkan
+                 */
+                "isAccessibilityServiceEnabled" -> {
+                    try {
+                        val isEnabled = isAccessibilityServiceEnabled(
+                            this, 
+                            ChatMonitorService::class.java
+                        )
+                        Log.d(TAG, "🔍 Accessibility Service enabled: $isEnabled")
+                        result.success(isEnabled)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "❌ Error checking accessibility service: ${e.message}")
+                        result.success(false)
+                    }
+                }
+                
+                /**
+                 * Minta izin Screen Capture (MediaProjection)
+                 */
+                "requestScreenCapturePermission" -> {
+                    try {
+                        Log.d(TAG, "📸 Requesting screen capture permission...")
+                        
+                        // Simpan result untuk dipanggil di onActivityResult
+                        pendingResult = result
+                        
+                        // Tampilkan dialog sistem "Izinkan merekam layar?"
+                        val captureIntent = mediaProjectionManager?.createScreenCaptureIntent()
+                        if (captureIntent != null) {
+                            startActivityForResult(captureIntent, SCREEN_CAPTURE_REQUEST_CODE)
+                        } else {
+                            Log.e(TAG, "❌ MediaProjection intent is null")
+                            result.error("ERROR", "MediaProjection tidak tersedia", null)
+                            pendingResult = null
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "❌ Failed to request screen capture: ${e.message}")
+                        result.error("ERROR", "Gagal membuka intent MediaProjection", e.message)
+                        pendingResult = null
+                    }
+                }
+                
+                /**
+                 * Memulai ChatMonitorService secara manual
+                 */
+                "startService" -> {
+                    try {
+                        Log.d(TAG, "🚀 Starting ChatMonitorService...")
+                        val intent = Intent(this, ChatMonitorService::class.java)
+                        
+                        // Gunakan startForegroundService untuk Android 8.0+
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            startForegroundService(intent)
+                        } else {
+                            startService(intent)
+                        }
+                        
+                        result.success(true)
+                        Log.d(TAG, "✅ Service start command sent")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "❌ Failed to start service: ${e.message}")
+                        result.error("ERROR", "Gagal start service", e.message)
+                    }
+                }
+                
+                /**
+                 * Menghentikan ChatMonitorService
+                 */
+                "stopService" -> {
+                    try {
+                        Log.d(TAG, "🛑 Stopping ChatMonitorService...")
+                        val intent = Intent(this, ChatMonitorService::class.java)
+                        stopService(intent)
+                        result.success(true)
+                        Log.d(TAG, "✅ Service stop command sent")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "❌ Failed to stop service: ${e.message}")
+                        result.error("ERROR", "Gagal stop service", e.message)
+                    }
+                }
+
+                else -> {
+                    Log.w(TAG, "⚠️ Method not implemented: ${call.method}")
+                    result.notImplemented()
+                }
+            }
+        }
+    }
+
+    /**
+     * Callback otomatis dipanggil setelah user klik "Allow" atau "Deny"
+     * di dialog screen capture permission
+     */
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        
+        if (requestCode == SCREEN_CAPTURE_REQUEST_CODE) {
+            if (resultCode == Activity.RESULT_OK && data != null) {
+                Log.i(TAG, "✅ Izin MediaProjection DIBERIKAN!")
+                
+                // Simpan "kunci" MediaProjection ke ScreenshotManager
+                // agar bisa diakses oleh Service
+                ScreenshotManager.mediaProjectionResultData = data
+                
+                // Restart service untuk mengambil "kunci" baru
+                val intent = Intent(this, ChatMonitorService::class.java)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    startForegroundService(intent)
+                } else {
+                    startService(intent)
+                }
+                
+                // Beritahu Flutter bahwa izin diberikan
+                pendingResult?.success(true)
+                
+            } else {
+                Log.e(TAG, "❌ Izin MediaProjection DITOLAK atau dibatalkan!")
+                
+                // Beritahu Flutter bahwa izin ditolak
+                pendingResult?.success(false)
+            }
+            
+            // Clear pending result
+            pendingResult = null
+        }
+    }
+
+    /**
+     * Membuat Notification Channel untuk Foreground Service
+     * Wajib dipanggil sebelum startForeground() di Android 8.0+
+     */
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            try {
+                val channel = NotificationChannel(
+                    NOTIFICATION_CHANNEL_ID,
+                    NOTIFICATION_CHANNEL_NAME,
+                    NotificationManager.IMPORTANCE_LOW
+                ).apply {
+                    description = "Notification untuk monitoring chat service yang berjalan di background"
+                    setShowBadge(false)
+                    enableLights(false)
+                    enableVibration(false)
+                    setSound(null, null)
+                }
+                
+                val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                notificationManager.createNotificationChannel(channel)
+                
+                Log.d(TAG, "✅ Notification channel '$NOTIFICATION_CHANNEL_ID' created successfully")
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Failed to create notification channel: ${e.message}")
+            }
+        } else {
+            Log.d(TAG, "ℹ️ Notification channel not needed for Android < 8.0")
+        }
+    }
+
+    /**
+     * Cek apakah Accessibility Service sudah diaktifkan oleh user
+     */
+    private fun isAccessibilityServiceEnabled(context: Context, service: Class<*>): Boolean {
+        try {
+            val accessibilityManager = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as? AccessibilityManager
+            
+            if (accessibilityManager == null) {
+                Log.e(TAG, "❌ AccessibilityManager is null")
+                return false
+            }
+            
+            val enabledServices = accessibilityManager.getEnabledAccessibilityServiceList(
+                AccessibilityServiceInfo.FEEDBACK_ALL_MASK
+            )
+
+            for (enabledService in enabledServices) {
+                val serviceInfo = enabledService.resolveInfo?.serviceInfo
+                
+                if (serviceInfo != null && 
+                    serviceInfo.packageName == context.packageName && 
+                    serviceInfo.name == service.name) {
+                    Log.d(TAG, "✅ Service ${service.simpleName} is enabled")
+                    return true
+                }
+            }
+            
+            Log.d(TAG, "⚠️ Service ${service.simpleName} is NOT enabled")
+            return false
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error checking accessibility service: ${e.message}")
+            e.printStackTrace()
+            return false
+        }
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        Log.d(TAG, "🎬 MainActivity onCreate")
+    }
+
+    override fun onResume() {
+        super.onResume()
+        Log.d(TAG, "▶️ MainActivity onResume")
+        
+        val isEnabled = isAccessibilityServiceEnabled(this, ChatMonitorService::class.java)
+        Log.d(TAG, "📊 Current service status: ${if (isEnabled) "ENABLED" else "DISABLED"}")
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        Log.d(TAG, "💀 MainActivity onDestroy")
+    }
+}
+</file>
+
+<file path="android/app/src/main/kotlin/com/example/agent_app/ScreenshotManager.kt">
+package com.example.agent_app
+
+import android.content.Intent
+import android.media.projection.MediaProjection
+
+object ScreenshotManager {
+    var mediaProjection: MediaProjection? = null
+    var mediaProjectionResultData: Intent? = null
+}
+</file>
+
+<file path="android/app/src/main/res/xml/accessibility_service_config.xml">
+<?xml version="1.0" encoding="utf-8"?>
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/accessibility_service_description"
+    android:accessibilityEventTypes="typeViewTextChanged|typeWindowStateChanged|typeWindowContentChanged"
+    android:packageNames="com.whatsapp, com.whatsapp.w4b, com.instagram.android"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:notificationTimeout="100"
+    android:canRetrieveWindowContent="true"
+    />
+</file>
+
+<file path="android/app/src/main/res/xml/network_security_config.xml">
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">127.0.0.1</domain>
+        </domain-config>
+</network-security-config>
+</file>
+
+<file path="android/app/src/profile/AndroidManifest.xml">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- The INTERNET permission is required for development. Specifically,
+         the Flutter tool needs it to communicate with the running application
+         to allow setting breakpoints, to provide hot reload, etc.
+    -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+</manifest>
+</file>
+
+<file path="lib/api_config.dart">
+// Lokasi: lib/api_config.dart
+
+class ApiConfig {
+  /// PERHATIAN: Ganti '192.168.1.xxx' dengan IPv4 fisik komputer/laptop Anda.
+  /// Pastikan HP Android dan Laptop terhubung ke jaringan WiFi yang sama.
+  static const String serverIp = "192.168.1.xxx";
+  static const String port = "8000";
+
+  // Base URL
+  static const String baseUrl = "http://$serverIp:$port/api";
+
+  // Endpoints
+  static const String incidentsEndpoint = "$baseUrl/incidents";
+
+  // Tambahkan endpoint lain di sini jika dibutuhkan di masa depan
+}
+</file>
+
+<file path="lib/main.dart">
+import 'dart:async';
+import 'dart:io';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:uuid/uuid.dart';
+import 'package:qr_flutter/qr_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:dio/dio.dart';
+import 'package:sqflite/sqflite.dart';
+import 'package:path/path.dart';
+import 'api_config.dart';
+
+void main() {
+  runApp(const MyApp());
+}
+
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      title: 'Agent AntiGrooming',
+      theme: ThemeData(
+        primarySwatch: Colors.blue,
+        brightness: Brightness.dark,
+        scaffoldBackgroundColor: const Color(0xFF0A0E21),
+        fontFamily: 'Roboto',
+      ),
+      home: const HomePage(),
+    );
+  }
+}
+
+class HomePage extends StatefulWidget {
+  const HomePage({super.key});
+
+  @override
+  State<HomePage> createState() => _HomePageState();
+}
+
+class _HomePageState extends State<HomePage>
+    with SingleTickerProviderStateMixin {
+  static const platform = MethodChannel('com.example.agent_app/service');
+  final Dio _dio = Dio();
+
+  bool _isServiceEnabled = false;
+  String _statusText = 'Belum Diaktifkan';
+  bool _isLoading = false;
+  String? _deviceToken;
+  bool _isPaired = false;
+
+  Timer? _pollingTimer;
+  Timer? _syncTimer;
+  late Database _localDb;
+
+  // Permission status
+  bool _hasNotificationPermission = false;
+  bool _hasAccessibilityPermission = false;
+  bool _hasScreenCapturePermission = false;
+
+  late AnimationController _animationController;
+  late Animation<double> _fadeAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    _initAnimation();
+    _initLocalDatabase().then((_) {
+      _initDeviceToken();
+    });
+    _setupMethodChannelListener();
+    _checkServiceStatus();
+    _checkNotificationPermission();
+  }
+
+  void _initAnimation() {
+    _animationController = AnimationController(
+      duration: const Duration(milliseconds: 800),
+      vsync: this,
+    );
+    _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _animationController, curve: Curves.easeIn),
+    );
+    _animationController.forward();
+  }
+
+  Future<void> _initLocalDatabase() async {
+    _localDb = await openDatabase(
+      join(await getDatabasesPath(), 'antigrooming.db'),
+      onCreate: (db, version) {
+        return db.execute(
+          'CREATE TABLE pending_incidents(id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT, appName TEXT, timestamp TEXT, screenshotPath TEXT)',
+        );
+      },
+      version: 1,
+    );
+    _syncTimer = Timer.periodic(
+      const Duration(seconds: 30),
+      (timer) => _syncOfflineData(),
+    );
+  }
+
+  Future<void> _initDeviceToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    String? token = prefs.getString('device_token');
+    bool pairedStatus = prefs.getBool('is_paired') ?? false;
+
+    if (token == null) {
+      token = const Uuid().v4();
+      await prefs.setString('device_token', token);
+    }
+
+    setState(() {
+      _deviceToken = token;
+      _isPaired = pairedStatus;
+    });
+
+    if (!_isPaired) _startPolling();
+  }
+
+  void _startPolling() {
+    _pollingTimer = Timer.periodic(const Duration(seconds: 5), (timer) async {
+      if (_deviceToken == null) return;
+      try {
+        final response = await _dio.get(
+          '${ApiConfig.baseUrl}/device/status/$_deviceToken',
+        );
+        if (response.data['status'] == 'paired') {
+          timer.cancel();
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setBool('is_paired', true);
+          setState(() => _isPaired = true);
+        }
+      } catch (e) {
+        // Abaikan jika server offline saat polling
+      }
+    });
+  }
+
+  void _setupMethodChannelListener() {
+    platform.setMethodCallHandler((call) async {
+      if (call.method == 'uploadIncident') {
+        await _handleIncidentPayload(call.arguments);
+      }
+    });
+  }
+
+  Future<void> _handleIncidentPayload(Map<dynamic, dynamic> data) async {
+    try {
+      await _sendToServer(data);
+    } catch (e) {
+      await _localDb.insert('pending_incidents', {
+        'text': data['text'],
+        'appName': data['appName'],
+        'timestamp': data['timestamp'],
+        'screenshotPath': data['screenshotPath'],
+      });
+    }
+  }
+
+  Future<void> _sendToServer(Map<dynamic, dynamic> incidentData) async {
+    if (_deviceToken == null) return;
+    FormData formData = FormData.fromMap({
+      'device_token': _deviceToken,
+      'detected_text': incidentData['text'],
+      'app_name': incidentData['appName'],
+      'risk_level': 'high',
+      'incident_timestamp': incidentData['timestamp'],
+      'pelaku_identitas':
+          incidentData['pelaku_identitas'] ??
+          'Tidak Diketahui', // <-- TAMBAHAN BARU
+    });
+
+    String? screenshotPath = incidentData['screenshotPath'];
+    if (screenshotPath != null && File(screenshotPath).existsSync()) {
+      formData.files.add(
+        MapEntry(
+          'screenshot',
+          await MultipartFile.fromFile(
+            screenshotPath,
+            filename: screenshotPath.split('/').last,
+          ),
+        ),
+      );
+    }
+    await _dio.post(ApiConfig.incidentsEndpoint, data: formData);
+  }
+
+  Future<void> _syncOfflineData() async {
+    final List<Map<String, dynamic>> pendingData = await _localDb.query(
+      'pending_incidents',
+    );
+    if (pendingData.isEmpty) return;
+
+    for (var row in pendingData) {
+      try {
+        await _sendToServer(row);
+        await _localDb.delete(
+          'pending_incidents',
+          where: 'id = ?',
+          whereArgs: [row['id']],
+        );
+      } catch (e) {
+        break;
+      }
+    }
+  }
+
+  Future<void> _checkNotificationPermission() async {
+    final notif = await Permission.notification.status;
+    setState(() => _hasNotificationPermission = notif.isGranted);
+  }
+
+  Future<void> _checkServiceStatus() async {
+    bool isEnabled = false;
+    try {
+      isEnabled = await platform.invokeMethod('isAccessibilityServiceEnabled');
+    } catch (e) {
+      isEnabled = false;
+    }
+
+    setState(() {
+      _isServiceEnabled = isEnabled;
+      _hasAccessibilityPermission = isEnabled;
+      _statusText = isEnabled ? 'Semua Aktif ✓' : 'Belum Diaktifkan';
+    });
+
+    if (isEnabled) {
+      try {
+        await platform.invokeMethod('startService');
+      } catch (e) {}
+    }
+  }
+
+  Future<void> _requestPermission() async {
+    setState(() {
+      _isLoading = true;
+      _statusText = 'Memproses izin...';
+    });
+
+    try {
+      var statusNotif = await Permission.notification.status;
+      if (!statusNotif.isGranted) {
+        statusNotif = await Permission.notification.request();
+        if (!statusNotif.isGranted) {
+          setState(() {
+            _statusText = 'Izin Notifikasi Ditolak!';
+            _isLoading = false;
+          });
+          return;
+        }
+      }
+      setState(() => _hasNotificationPermission = true);
+
+      await platform.invokeMethod('requestAccessibilityPermission');
+      await Future.delayed(const Duration(seconds: 15));
+
+      final isAccessibilityEnabled = await platform.invokeMethod(
+        'isAccessibilityServiceEnabled',
+      );
+      setState(() => _hasAccessibilityPermission = isAccessibilityEnabled);
+
+      if (!isAccessibilityEnabled) {
+        setState(() {
+          _statusText = 'Aksesibilitas belum diaktifkan';
+          _isLoading = false;
+        });
+        return;
+      }
+
+      await platform.invokeMethod('requestScreenCapturePermission');
+      await Future.delayed(const Duration(seconds: 5));
+      await _checkServiceStatus();
+
+      setState(() => _isLoading = false);
+
+      if (_isServiceEnabled) {
+        setState(() => _hasScreenCapturePermission = true);
+      }
+    } catch (e) {
+      setState(() {
+        _statusText = 'Error terjadi';
+        _isLoading = false;
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _pollingTimer?.cancel();
+    _syncTimer?.cancel();
+    _localDb.close();
+    _animationController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            colors: [Color(0xFF0A0E21), Color(0xFF1D1E33), Color(0xFF0A0E21)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+        ),
+        child: SafeArea(
+          child: FadeTransition(
+            opacity: _fadeAnimation,
+            child: SingleChildScrollView(
+              physics: const BouncingScrollPhysics(),
+              child: Padding(
+                padding: const EdgeInsets.all(24.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const SizedBox(height: 20),
+                    _buildHeader(),
+                    const SizedBox(height: 40),
+                    _buildStatusCard(),
+                    const SizedBox(height: 30),
+                    _buildPermissionChecklist(),
+                    const SizedBox(height: 30),
+                    _buildMainButton(),
+                    const SizedBox(height: 30),
+                    _buildQrCodeSection(),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildQrCodeSection() {
+    if (_deviceToken == null) return const SizedBox.shrink();
+    if (_isPaired) {
+      return Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: Colors.green.withOpacity(0.2),
+          borderRadius: BorderRadius.circular(15),
+        ),
+        child: const Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.link, color: Colors.green),
+            SizedBox(width: 10),
+            Text(
+              'Perangkat Terhubung ke Aplikasi Orang Tua',
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Column(
+        children: [
+          const Text(
+            'Scan QR ini di Aplikasi Orang Tua',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: Colors.black87,
+            ),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 16),
+          QrImageView(
+            data: _deviceToken!,
+            version: QrVersions.auto,
+            size: 200.0,
+            backgroundColor: Colors.white,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHeader() {
+    return Column(
+      children: [
+        Icon(
+          Icons.shield,
+          size: 60,
+          color: _isServiceEnabled ? Colors.green : Colors.blue,
+        ),
+        const SizedBox(height: 20),
+        const Text(
+          'Agent AntiGrooming',
+          style: TextStyle(
+            fontSize: 28,
+            fontWeight: FontWeight.bold,
+            color: Colors.white,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildStatusCard() {
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1D1E33),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Text(
+        _statusText,
+        style: const TextStyle(fontSize: 18, color: Colors.white),
+        textAlign: TextAlign.center,
+      ),
+    );
+  }
+
+  Widget _buildPermissionChecklist() {
+    return Column(
+      children: [
+        _buildPermissionItem(
+          'Notifikasi',
+          _hasNotificationPermission,
+          Icons.notifications,
+        ),
+        _buildPermissionItem(
+          'Aksesibilitas',
+          _hasAccessibilityPermission,
+          Icons.accessibility,
+        ),
+        _buildPermissionItem(
+          'Rekam Layar',
+          _hasScreenCapturePermission,
+          Icons.screenshot,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPermissionItem(String title, bool isGranted, IconData icon) {
+    return Row(
+      children: [
+        Icon(icon, color: isGranted ? Colors.green : Colors.grey),
+        const SizedBox(width: 12),
+        Text(
+          title,
+          style: TextStyle(color: isGranted ? Colors.white : Colors.grey),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMainButton() {
+    return ElevatedButton(
+      style: ElevatedButton.styleFrom(
+        backgroundColor: _isServiceEnabled ? Colors.green : Colors.blue,
+        padding: const EdgeInsets.symmetric(vertical: 18),
+      ),
+      onPressed: _isLoading
+          ? null
+          : (_isServiceEnabled ? _checkServiceStatus : _requestPermission),
+      child: _isLoading
+          ? const CircularProgressIndicator(color: Colors.white)
+          : Text(_isServiceEnabled ? 'REFRESH STATUS' : 'AKTIFKAN LAYANAN'),
+    );
+  }
+}
+</file>
+
+</files>

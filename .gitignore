@@ -1,0 +1,46 @@
+# Root GitIgnore for AI-AntiGrooming and agent_app workspace
+
+# Python virtual environment and caches
+**/venv/
+**/__pycache__/
+**/*.pyc
+
+# IDEs and Editors
+**/.idea/
+**/.vscode/
+**/.zed/
+**/*.iml
+**/*.ipr
+**/*.iws
+
+# Laravel specific ignores
+**/node_modules/
+**/vendor/
+**/.env
+**/.env.backup
+**/.env.production
+**/public/storage
+**/storage/*.key
+**/storage/pail
+**/public/build
+**/public/hot
+Homestead.json
+Homestead.yaml
+
+# Flutter / Dart specific ignores
+**/.dart_tool/
+**/.flutter-plugins-dependencies
+**/.pub-cache/
+**/.pub/
+**/build/
+**/coverage/
+app.*.symbols
+app.*.map.json
+**/android/app/debug
+**/android/app/profile
+**/android/app/release
+
+# OS specific ignores
+*.log
+.DS_Store
+Thumbs.db
